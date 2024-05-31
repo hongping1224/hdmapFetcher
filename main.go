@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -16,6 +17,8 @@ import (
 
 func main() {
 	map_path := flag.String("map", "./point_cloud_map_list.csv", "map list with colume in this order \"path,minx,miny,_,maxx,maxy,...\"")
+	vec_path := flag.String("vec", "./vector_map_list.csv", "vector list with colume in this order \"path,minx,miny,maxx,maxy,...\"")
+	vec_name := flag.String("vec_name", "", "vector name i.e sign , pole, markline")
 	pos_path := flag.String("pos", "./pos.csv", "pos with colume in this order \"_,x,y,...\"")
 	buffersize := flag.Float64("buffer", 50, "buffer size to find path")
 	out := flag.String("out", "./download.sh", "Output path")
@@ -25,20 +28,41 @@ func main() {
 		log.Printf("mode %d is not support, use mode 0", *mode)
 		*mode = 0
 	}
+	var sb strings.Builder
+	sb.WriteString("mkdir hd_maps\n")
+	sb.WriteString("cd hd_maps\n")
+
+	err := generatePointCloudDownload(*map_path, *pos_path, *buffersize, *mode, &sb)
+	if err != nil {
+		log.Println(err)
+		return
+	}
+	err = generateVectorDownload(*vec_path, *pos_path, *vec_name, *buffersize, *mode, &sb)
+	if err != nil {
+		log.Println(err)
+		return
+	}
+	//	gcloud storage -m cp "gs://hdmrc-setting/hd_maps/THSR/point_cloud_map/T61_North" .
+	err = os.WriteFile(*out, []byte(sb.String()), 0644)
+	if err != nil {
+		log.Println(err)
+		return
+	}
+}
+
+func generatePointCloudDownload(map_path, pos_path string, buffersize float64, mode uint, sb *strings.Builder) error {
 	start := time.Now()
 	// create a 2D RTree
-	tr, err := GenerateTree(*map_path, *buffersize)
+	pctree, err := GenerateTree(map_path, buffersize, 1, 2, 4, 5)
 	if err != nil {
-		fmt.Println(err)
-		return
+		return err
 	}
 	elapsed := time.Since(start)
 	log.Printf("build took %s", elapsed)
 	start = time.Now()
-	pos, err := ReadPos(*pos_path)
+	pos, err := ReadPos(pos_path)
 	if err != nil {
-		log.Println(err)
-		return
+		return err
 	}
 	found := make(map[string]bool)
 
@@ -46,7 +70,7 @@ func main() {
 		// search
 		x := p[0]
 		y := p[1]
-		tr.Search([2]float64{x, y}, [2]float64{x, y},
+		pctree.Search([2]float64{x, y}, [2]float64{x, y},
 			func(min, max [2]float64, data string) bool {
 				found[data] = true
 
@@ -61,10 +85,11 @@ func main() {
 	log.Printf("Map Count %d", len(found))
 	if len(found) == 0 {
 		log.Printf("no map found , skip operation")
-		return
+		return nil
 	}
-	var sb strings.Builder
-	if *mode == 0 {
+	sb.WriteString("mkdir point_cloud_map\n")
+	sb.WriteString("cd point_cloud_map\n")
+	if mode == 0 {
 		sb.WriteString("gsutil -m cp")
 	} else {
 		sb.WriteString("gcloud storage cp")
@@ -75,17 +100,75 @@ func main() {
 		sb.WriteString(k)
 	}
 
-	sb.WriteString(" .")
-	//	gcloud storage -m cp "gs://hdmrc-setting/hd_maps/THSR/point_cloud_map/T61_North" .
-	err = os.WriteFile(*out, []byte(sb.String()), 0644)
-	if err != nil {
+	sb.WriteString(" .\n")
+	sb.WriteString("cd ..\n")
 
-		log.Println(err)
-		return
-	}
+	return nil
 }
 
-func GenerateTree(paths string, buffersize float64) (rtree.RTreeG[string], error) {
+func generateVectorDownload(vector_path, pos_path, vec_name string, buffersize float64, mode uint, sb *strings.Builder) error {
+	start := time.Now()
+	// create a 2D RTree
+	pctree, err := GenerateTree(vector_path, buffersize, 1, 2, 3, 4)
+	if err != nil {
+		return err
+	}
+	elapsed := time.Since(start)
+	log.Printf("build took %s", elapsed)
+	start = time.Now()
+	pos, err := ReadPos(pos_path)
+	if err != nil {
+		return err
+	}
+	found := make(map[string]bool)
+	vec_name = strings.ToLower(vec_name)
+	for _, p := range pos {
+		// search
+		x := p[0]
+		y := p[1]
+		pctree.Search([2]float64{x, y}, [2]float64{x, y},
+			func(min, max [2]float64, data string) bool {
+				if strings.Contains(strings.ToLower(data), vec_name) {
+					found[data] = true
+				}
+				//println(data.(string)) // prints "PHX"
+				return true
+			},
+		)
+	}
+
+	elapsed = time.Since(start)
+	log.Printf("Search took %s", elapsed)
+	log.Printf("Map Count %d", len(found))
+	if len(found) == 0 {
+		log.Printf("no map found , skip operation")
+		return nil
+	}
+	sb.WriteString("mkdir vector_map\n")
+	sb.WriteString("cd vector_map\n")
+	modestring := "gsutil -m cp"
+	if mode == 1 {
+		modestring = "gcloud storage cp"
+	}
+	for k := range found {
+		dir := filepath.Dir(k)
+		parent := filepath.Base(dir)
+		sb.WriteString("mkdir ")
+		sb.WriteString(parent)
+		sb.WriteString("\n")
+		sb.WriteString(modestring)
+		sb.WriteString(" gs://hdmrc-setting/hd_maps/THSR/")
+		sb.WriteString(strings.Replace(k, ".shp", ".*", -1))
+		sb.WriteString(" ./")
+		sb.WriteString(parent)
+		sb.WriteString("/\n")
+	}
+	sb.WriteString("cd ..\n")
+
+	return nil
+}
+
+func GenerateTree(paths string, buffersize float64, minxIndex, minyIndex, maxxIndex, maxyIndex int) (rtree.RTreeG[string], error) {
 	var tr rtree.RTreeG[string]
 	f, err := os.Open(paths)
 	if err != nil {
@@ -103,19 +186,19 @@ func GenerateTree(paths string, buffersize float64) (rtree.RTreeG[string], error
 			return tr, err
 		}
 		var minx, miny, maxx, maxy float64
-		if minx, err = strconv.ParseFloat(row[1], 64); err != nil {
+		if minx, err = strconv.ParseFloat(row[minxIndex], 64); err != nil {
 			fmt.Println(row)
 			continue
 		}
-		if miny, err = strconv.ParseFloat(row[2], 64); err != nil {
+		if miny, err = strconv.ParseFloat(row[minyIndex], 64); err != nil {
 			fmt.Println(row)
 			continue
 		}
-		if maxx, err = strconv.ParseFloat(row[4], 64); err != nil {
+		if maxx, err = strconv.ParseFloat(row[maxxIndex], 64); err != nil {
 			fmt.Println(row)
 			continue
 		}
-		if maxy, err = strconv.ParseFloat(row[5], 64); err != nil {
+		if maxy, err = strconv.ParseFloat(row[maxyIndex], 64); err != nil {
 			fmt.Println(row)
 			continue
 		}
