@@ -19,8 +19,9 @@ func main() {
 	map_path := flag.String("map", "./point_cloud_map_list.csv", "map list with colume in this order \"path,minx,miny,_,maxx,maxy,...\"")
 	vec_path := flag.String("vec", "./vector_map_list.csv", "vector list with colume in this order \"path,minx,miny,maxx,maxy,...\"")
 	vec_name := flag.String("vec_name", "", "vector name i.e sign , pole, markline")
-	pos_path := flag.String("pos", "./pos.csv", "pos with colume in this order \"_,x,y,...\"")
+	pos_path := flag.String("pos", "./pos.csv", "pos with colume in this order \"_,_,_,_,x,y,...\"")
 	buffersize := flag.Float64("buffer", 50, "buffer size to find path")
+	onlyvec := flag.Bool("onlyvec", false, "only download vec")
 	out := flag.String("out", "./download.sh", "Output path")
 	mode := flag.Uint("mode", 0, "download mode, 0 is gsutil, 1 is gcloud storage")
 	flag.Parse()
@@ -31,13 +32,14 @@ func main() {
 	var sb strings.Builder
 	sb.WriteString("mkdir hd_maps\n")
 	sb.WriteString("cd hd_maps\n")
-
-	err := generatePointCloudDownload(*map_path, *pos_path, *buffersize, *mode, &sb)
-	if err != nil {
-		log.Println(err)
-		return
+	if !*onlyvec {
+		err := generatePointCloudDownload(*map_path, *pos_path, *buffersize, *mode, &sb)
+		if err != nil {
+			log.Println(err)
+			return
+		}
 	}
-	err = generateVectorDownload(*vec_path, *pos_path, *vec_name, *buffersize, *mode, &sb)
+	err := generateVectorDownload(*vec_path, *pos_path, *vec_name, *buffersize, *mode, &sb)
 	if err != nil {
 		log.Println(err)
 		return
@@ -225,11 +227,11 @@ func ReadPos(path string) ([][2]float64, error) {
 			return pos, err
 		}
 		var x, y float64
-		if x, err = strconv.ParseFloat(row[1], 64); err != nil {
+		if x, err = strconv.ParseFloat(row[4], 64); err != nil {
 			fmt.Println(row)
 			continue
 		}
-		if y, err = strconv.ParseFloat(row[2], 64); err != nil {
+		if y, err = strconv.ParseFloat(row[5], 64); err != nil {
 			fmt.Println(row)
 			continue
 		}
